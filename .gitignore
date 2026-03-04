@@ -14,9 +14,7 @@
 
 *.bak
 # Environment files (containing secrets, API keys, credentials)
-.env
 *.env
-.env.*
 
 # Local configuration that shouldn't be shared
 *.local
@@ -25,8 +23,12 @@
 # next_js specific files
 
 .next/
-.env.local
 .env.development.local
 .env.test.local
 .env.production.local
 node_modules/
+.vercel
+
+# Local Netlify folder
+.netlify
+config.bat
