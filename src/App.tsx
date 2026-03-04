@@ -18,7 +18,8 @@ import {
   ChevronUp,
   Volume1,
   VolumeX,
-  Power
+  Power,
+  Waves
 } from 'lucide-react'
 import Piano from './components/Piano'
 import { useKeyboardInput } from './hooks/useKeyboardInput'
@@ -42,6 +43,7 @@ interface FallingNote {
 
 function App() {
   const [volume, setVolumeState] = useState(-6)
+  const [reverbWet, setReverbWet] = useState(30)
   const [isMuted, setIsMuted] = useState(false)
   const [isPlaying, setIsPlaying] = useState(false)
   const [isPaused, setIsPaused] = useState(false)
@@ -60,7 +62,6 @@ function App() {
   const [isSustained, setIsSustained] = useState(false)
   const [showFallingNotes, setShowFallingNotes] = useState(true)
   const [showControls, setShowControls] = useState(true)
-  const [audioReady, setAudioReady] = useState(false)
   
   const fileInputRef = useRef<HTMLInputElement>(null)
   const metronomeRef = useRef<Tone.Synth | null>(null)
@@ -73,42 +74,50 @@ function App() {
   const playbackStartTimeRef = useRef<number>(0)
   const canvasAnimationRef = useRef<number | null>(null)
   
-  const { startAudio, synthRef } = usePianoAudio()
+  const { startAudio, triggerAttack, triggerRelease, releaseAll, setVolume, setReverb, isLoading, isReady, samplerRef } = usePianoAudio()
+  
+  // Use isReady from hook to determine audio state
+  const audioReady = isReady
   
   const updateVolume = useCallback((vol: number) => {
     setVolumeState(vol)
-  }, [])
+    setVolume(vol)
+  }, [setVolume])
+  
+  const updateReverb = useCallback((wet: number) => {
+    setReverbWet(wet)
+    setReverb(wet / 100)
+  }, [setReverb])
   
   const handleInitAudio = useCallback(async () => {
-    console.log('Initializing audio...')
+    console.log('Initializing audio with real piano samples...')
     await startAudio()
-    setAudioReady(true)
+    // audioReady will be set by the hook via isReady
   }, [startAudio])
   
   const playNote = useCallback(async (note: string, velocity = 0.8) => {
     if (!audioReady) {
       await handleInitAudio()
     }
-    if (synthRef.current) {
-      if (isSustained) sustainedNotesRef.current.add(note)
-      synthRef.current.triggerAttack(note, Tone.now(), velocity)
-    }
+    triggerAttack(note, velocity)
+    if (isSustained) sustainedNotesRef.current.add(note)
     if (isRecording) setRecordedNotes(prev => [...prev, { note, velocity, time: Tone.now() - recordedStartTimeRef.current, duration: 0 }])
   }, [audioReady, handleInitAudio, isSustained, isRecording])
   
   const stopNote = useCallback((note: string) => {
-    if (synthRef.current && !isSustained) {
+    if (!isSustained) {
       sustainedNotesRef.current.delete(note)
-      synthRef.current.triggerRelease(note, Tone.now())
+      triggerRelease(note)
     }
   }, [isSustained])
 
   const releaseAllSustained = useCallback(() => {
-    if (synthRef.current && sustainedNotesRef.current.size > 0) {
-      sustainedNotesRef.current.forEach(note => synthRef.current?.triggerRelease(note, Tone.now()))
+    if (sustainedNotesRef.current.size > 0) {
+      // Use releaseAll for cleaner release
+      releaseAll()
       sustainedNotesRef.current.clear()
     }
-  }, [])
+  }, [releaseAll])
 
   const handleKeyDown = useCallback((note: string) => {
     setActiveKeys(prev => new Set(prev).add(note))
@@ -131,8 +140,8 @@ function App() {
   })
 
   useEffect(() => { 
-    if (synthRef.current) {
-      synthRef.current.volume.value = isMuted ? -60 : volume 
+    if (samplerRef.current) {
+      samplerRef.current.volume.value = isMuted ? -60 : volume 
     }
   }, [volume, isMuted])
 
@@ -316,7 +325,7 @@ function App() {
         const timeInSeconds = midiNote.time * (120 / tempo)
         if (Tone.getTransport().seconds >= timeInSeconds) {
           setActiveKeys(prev => new Set(prev).add(midiNote.note))
-          if (synthRef.current) synthRef.current.triggerAttackRelease(midiNote.note, midiNote.duration, Tone.now(), midiNote.velocity)
+          if (samplerRef.current) samplerRef.current.triggerAttackRelease(midiNote.note, midiNote.duration, Tone.now(), midiNote.velocity)
           noteIndex++
         } else break
       }
@@ -367,11 +376,16 @@ function App() {
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/90 backdrop-blur-sm">
           <button
             onClick={handleInitAudio}
-            className="flex flex-col items-center gap-4 px-8 py-6 bg-indigo-600 hover:bg-indigo-700 text-white rounded-2xl shadow-2xl shadow-indigo-500/30 transition-all transform hover:scale-105"
+            disabled={isLoading}
+            className="flex flex-col items-center gap-4 px-8 py-6 bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-400 text-white rounded-2xl shadow-2xl shadow-indigo-500/30 transition-all transform hover:scale-105 disabled:transform-none"
           >
-            <Power size={48} />
-            <span className="text-xl font-bold">Click to Start Piano</span>
-            <span className="text-sm text-indigo-200">Enable audio to play</span>
+            <Power size={48} className={isLoading ? 'animate-pulse' : ''} />
+            <span className="text-xl font-bold">
+              {isLoading ? 'Loading Piano Samples...' : 'Click to Start Piano'}
+            </span>
+            <span className="text-sm text-indigo-200">
+              {isLoading ? 'Loading real piano sounds...' : 'Enable audio to play'}
+            </span>
           </button>
         </div>
       )}
@@ -398,6 +412,20 @@ function App() {
               {isMuted ? <VolumeX size={14} /> : <Volume1 size={14} />}
             </button>
             <input type="range" min="-24" max="0" value={isMuted ? -60 : volume} onChange={(e) => updateVolume(Number(e.target.value))} className="w-16 accent-indigo-600" />
+          </div>
+
+          {/* Reverb */}
+          <div className="flex items-center gap-2 bg-slate-100 rounded-lg px-3 py-1.5">
+            <Waves size={14} className="text-cyan-600" />
+            <input 
+              type="range" 
+              min="0" 
+              max="100" 
+              value={reverbWet} 
+              onChange={(e) => updateReverb(Number(e.target.value))} 
+              className="w-16 accent-cyan-600" 
+              disabled={!audioReady}
+            />
           </div>
 
           {/* Octave */}
