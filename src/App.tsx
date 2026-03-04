@@ -19,11 +19,13 @@ import {
   Volume1,
   VolumeX,
   Power,
-  Waves
+  Waves,
+  Usb
 } from 'lucide-react'
 import Piano from './components/Piano'
 import { useKeyboardInput } from './hooks/useKeyboardInput'
 import { usePianoAudio } from './hooks/usePianoAudio'
+import { useMidiInput } from './hooks/useMidiInput'
 
 interface MidiNote {
   note: string
@@ -62,6 +64,7 @@ function App() {
   const [isSustained, setIsSustained] = useState(false)
   const [showFallingNotes, setShowFallingNotes] = useState(true)
   const [showControls, setShowControls] = useState(true)
+  const [midiDeviceConnected, setMidiDeviceConnected] = useState(false)
   
   const fileInputRef = useRef<HTMLInputElement>(null)
   const metronomeRef = useRef<Tone.Synth | null>(null)
@@ -72,9 +75,41 @@ function App() {
   const fallingNotesRef = useRef<FallingNote[]>([])
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const playbackStartTimeRef = useRef<number>(0)
+  const isPlayingRef = useRef<boolean>(false)
   const canvasAnimationRef = useRef<number | null>(null)
   
-  const { startAudio, triggerAttack, triggerRelease, releaseAll, setVolume, setReverb, isLoading, isReady, samplerRef } = usePianoAudio()
+  const { startAudio, triggerAttack, triggerRelease, releaseAll, setVolume, setReverb, isLoading, isReady, samplerRef, synthRef } = usePianoAudio()
+  
+  // MIDI keyboard input
+  const { midiDevices, selectedDeviceId, isSupported: midiSupported, requestMidiAccess, connectDevice, disconnectDevice } = useMidiInput({
+    onNoteOn: (note, velocity) => {
+      setActiveKeys(prev => new Set(prev).add(note))
+      playNote(note, velocity)
+    },
+    onNoteOff: (note) => {
+      setActiveKeys(prev => { const next = new Set(prev); next.delete(note); return next })
+      stopNote(note)
+    }
+  })
+
+  // Toggle MIDI device
+  const toggleMidi = useCallback(async () => {
+    if (!midiSupported) {
+      alert('Web MIDI API is not supported in this browser')
+      return
+    }
+    if (selectedDeviceId) {
+      disconnectDevice()
+      setMidiDeviceConnected(false)
+    } else {
+      await requestMidiAccess()
+    }
+  }, [midiSupported, selectedDeviceId, requestMidiAccess, disconnectDevice])
+
+  // Track MIDI connection status
+  useEffect(() => {
+    setMidiDeviceConnected(!!selectedDeviceId)
+  }, [selectedDeviceId])
   
   // Use isReady from hook to determine audio state
   const audioReady = isReady
@@ -242,9 +277,93 @@ function App() {
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
     if (!file) return
-    if (!audioReady) await handleInitAudio()
     setMidiFileName(file.name)
     const arrayBuffer = await file.arrayBuffer()
+    await parseMidiFromBuffer(arrayBuffer)
+  }
+
+  // Load test MIDI file
+  const loadTestMidi = useCallback(async () => {
+    if (!audioReady) await handleInitAudio()
+    try {
+      const response = await fetch('/test.mid')
+      const buffer = await response.arrayBuffer()
+      
+      // Inline MIDI parsing
+      const midiData = new Uint8Array(buffer)
+      const notes: MidiNote[] = []
+      let offset = 0
+      if (midiData[0] === 0x4D && midiData[1] === 0x54 && midiData[2] === 0x68 && midiData[3] === 0x64) offset = 22
+      
+      const noteToName = (num: number): string => {
+        const notesArr = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B']
+        const octave = Math.floor(num / 12) - 1
+        return `${notesArr[num % 12]}${octave}`
+      }
+      
+      while (offset < midiData.length) {
+        if (midiData[offset] === 0x4D && midiData[offset + 1] === 0x54 && midiData[offset + 2] === 0x72 && midiData[offset + 3] === 0x6B) {
+          offset += 8
+          let runningStatus = 0
+          let time = 0
+          while (offset < midiData.length) {
+            let deltaTime = 0, bytesRead = 0
+            for (let i = 0; i < 4; i++) { deltaTime = (deltaTime << 7) | (midiData[offset + i] & 0x7F); bytesRead++; if ((midiData[offset + i] & 0x80) === 0) break }
+            offset += bytesRead
+            time += deltaTime / 1000
+            let status = midiData[offset]
+            if (status === undefined) break
+            if ((status & 0x80) === 0) { status = runningStatus; offset-- }
+            runningStatus = status
+            const eventType = status & 0xF0
+            if (eventType === 0x90 && midiData[offset + 2] > 0) {
+              const noteNum = midiData[offset + 1]
+              const velocity = midiData[offset + 2] / 127
+              notes.push({ note: noteToName(noteNum), velocity, time, duration: 0.5 })
+              offset += 3
+            } else if (eventType === 0x80 || (eventType === 0x90 && midiData[offset + 2] === 0)) {
+              offset += 3
+            } else if (status === 0xFF) {
+              const metaType = midiData[offset + 1]
+              let metaLength = midiData[offset + 2]
+              offset += 3 + metaLength
+              if (metaType === 0x2F) break
+            } else { offset++ }
+          }
+        } else { offset++ }
+      }
+      
+      notes.sort((a, b) => a.time - b.time)
+      for (let i = 0; i < notes.length - 1; i++) notes[i].duration = notes[i + 1].time - notes[i].time
+      if (notes.length > 0) notes[notes.length - 1].duration = 0.5
+      
+      const colors = ['#ef4444', '#f97316', '#eab308', '#22c55e', '#06b6d4', '#3b82f6', '#8b5cf6', '#ec4899']
+      fallingNotesRef.current = notes.map((note, i) => ({
+        note: note.note,
+        velocity: note.velocity,
+        startTime: note.time,
+        endTime: note.time + note.duration,
+        color: colors[i % colors.length],
+        lane: 0
+      }))
+      midiNotesRef.current = notes
+      setMidiNotes(notes)
+      setMidiFileName('test.mid')
+      setShowFallingNotes(true)
+    } catch (err) {
+      console.error('Failed to load test MIDI:', err)
+    }
+  }, [audioReady, handleInitAudio])
+
+  const midiNumToNote = (num: number): string | null => {
+    const notes = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B']
+    const octave = Math.floor(num / 12) - 1
+    const note = notes[num % 12]
+    return note ? `${note}${octave}` : null
+  }
+
+  // Parse MIDI file from ArrayBuffer
+  const parseMidiFromBuffer = useCallback(async (arrayBuffer: ArrayBuffer) => {
     const midiData = new Uint8Array(arrayBuffer)
     const notes: MidiNote[] = []
     let offset = 0
@@ -299,18 +418,12 @@ function App() {
     midiNotesRef.current = notes
     setMidiNotes(notes)
     setShowFallingNotes(true)
-  }
-
-  const midiNumToNote = (num: number): string | null => {
-    const notes = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B']
-    const octave = Math.floor(num / 12) - 1
-    const note = notes[num % 12]
-    return note ? `${note}${octave}` : null
-  }
+  }, [])
 
   const playMidi = useCallback(async () => {
     if (midiNotesRef.current.length === 0) return
     if (!audioReady) await handleInitAudio()
+    isPlayingRef.current = true
     setIsPlaying(true)
     setIsPaused(false)
     playbackStartTimeRef.current = Tone.now()
@@ -318,28 +431,34 @@ function App() {
     Tone.getTransport().start()
     let noteIndex = 0
     const notes = midiNotesRef.current
+    
     const scheduleNote = () => {
-      if (!isPlaying || isPaused) return
+      if (!isPlayingRef.current || isPaused) return
       while (noteIndex < notes.length) {
         const midiNote = notes[noteIndex]
         const timeInSeconds = midiNote.time * (120 / tempo)
         if (Tone.getTransport().seconds >= timeInSeconds) {
           setActiveKeys(prev => new Set(prev).add(midiNote.note))
-          if (samplerRef.current) samplerRef.current.triggerAttackRelease(midiNote.note, midiNote.duration, Tone.now(), midiNote.velocity)
+          // Use the same triggerAttackRelease as keyboard for consistent audio
+          if (samplerRef.current) {
+            samplerRef.current.triggerAttackRelease(midiNote.note, midiNote.duration, Tone.now(), midiNote.velocity)
+          } else if (synthRef.current) {
+            synthRef.current.triggerAttackRelease(midiNote.note, midiNote.duration, Tone.now(), midiNote.velocity)
+          }
           noteIndex++
         } else break
       }
       if (noteIndex >= notes.length) {
         if (isLooping) { noteIndex = 0; playbackStartTimeRef.current = Tone.now(); Tone.getTransport().position = 0 }
-        else { setIsPlaying(false); setActiveKeys(new Set()); return }
+        else { isPlayingRef.current = false; setIsPlaying(false); setActiveKeys(new Set()); return }
       }
       animationFrameRef.current = requestAnimationFrame(scheduleNote)
     }
     scheduleNote()
-  }, [tempo, isLooping, isPlaying, isPaused, audioReady, handleInitAudio])
+  }, [tempo, isLooping, isPaused, audioReady, handleInitAudio])
 
   const pauseMidi = () => { setIsPaused(true); Tone.getTransport().pause() }
-  const stopMidi = () => { setIsPlaying(false); setIsPaused(false); setActiveKeys(new Set()); Tone.getTransport().stop(); Tone.getTransport().position = 0; if (animationFrameRef.current) cancelAnimationFrame(animationFrameRef.current) }
+  const stopMidi = () => { isPlayingRef.current = false; setIsPlaying(false); setIsPaused(false); setActiveKeys(new Set()); Tone.getTransport().stop(); Tone.getTransport().position = 0; if (animationFrameRef.current) cancelAnimationFrame(animationFrameRef.current) }
 
   const toggleFullscreen = () => { document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen() }
   
@@ -463,6 +582,15 @@ function App() {
             <button onClick={() => fileInputRef.current?.click()} className="flex items-center gap-1.5 text-xs font-medium text-indigo-600 hover:text-indigo-700">
               <Upload size={12} />{midiFileName ? midiFileName.slice(0, 10) : 'Load MIDI'}
             </button>
+            {midiNotes.length === 0 && (
+              <button 
+                onClick={loadTestMidi}
+                className="text-xs font-medium text-green-600 hover:text-green-700 ml-1"
+                title="Load test MIDI file"
+              >
+                (test)
+              </button>
+            )}
           </div>
 
           {/* Playback */}
@@ -483,6 +611,37 @@ function App() {
 
           <button onClick={toggleRecording} className={`p-1.5 rounded-lg ${isRecording ? 'bg-red-100 text-red-600 animate-pulse' : 'bg-slate-100 text-slate-500'}`}><Mic size={14} /></button>
           <button onClick={toggleMetronome} className={`p-1.5 rounded-lg ${metronomeEnabled ? 'bg-cyan-100 text-cyan-600' : 'bg-slate-100 text-slate-500'}`}>🎵</button>
+          
+          {/* MIDI Keyboard */}
+          {midiSupported && (
+            <div className="flex items-center gap-1">
+              <button 
+                onClick={toggleMidi} 
+                className={`p-1.5 rounded-lg ${midiDeviceConnected ? 'bg-emerald-100 text-emerald-600' : 'bg-slate-100 text-slate-500'}`}
+                title={midiDeviceConnected ? 'Disconnect MIDI Keyboard' : 'Connect MIDI Keyboard'}
+              >
+                <Usb size={14} />
+              </button>
+              {midiDevices.length > 0 && (
+                <select 
+                  value={selectedDeviceId || ''}
+                  onChange={(e) => {
+                    if (e.target.value) {
+                      connectDevice(e.target.value)
+                    } else {
+                      disconnectDevice()
+                    }
+                  }}
+                  className="text-xs bg-white border border-slate-200 rounded px-2 py-1 max-w-[120px]"
+                >
+                  <option value="">No Device</option>
+                  {midiDevices.map(device => (
+                    <option key={device.id} value={device.id}>{device.name.slice(0, 15)}</option>
+                  ))}
+                </select>
+              )}
+            </div>
+          )}
         </div>
       )}
 
@@ -510,7 +669,10 @@ function App() {
 
       {/* Footer */}
       <footer className="px-4 py-2 text-center text-xs text-slate-500 bg-white border-t border-slate-200">
-        <p><span className="font-medium">Keyboard:</span> Z S X D C V G B H N J M (C{currentOctave+1}) | Q W E R T Y U (C{currentOctave+2}) | Space: Sustain</p>
+        <p>
+          <span className="font-medium">Keyboard:</span> Z S X D C V G B H N J M (C{currentOctave+1}) | Q W E R T Y U (C{currentOctave+2}) | Space: Sustain
+          {midiSupported && <span className="ml-2">| <Usb size={10} className="inline" /> MIDI: Click USB button above</span>}
+        </p>
       </footer>
     </div>
   )
