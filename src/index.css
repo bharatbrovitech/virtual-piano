@@ -1,0 +1,71 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --piano-white: #fafafa;
+  --piano-white-pressed: #e5e5e5;
+  --piano-black: #1a1a1a;
+  --piano-black-pressed: #333;
+  --accent-primary: #8b5cf6;
+  --accent-secondary: #6366f1;
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  font-family: system-ui, -apple-system, sans-serif;
+  background: #0f0f23;
+  color: #f8fafc;
+  min-height: 100vh;
+}
+
+.piano-key-white {
+  background: linear-gradient(180deg, #fafafa 0%, #e8e8e8 100%);
+  border: 1px solid #d4d4d4;
+  border-radius: 0 0 6px 6px;
+  transition: all 0.08s ease;
+}
+
+.piano-key-white:hover {
+  background: linear-gradient(180deg, #fff 0%, #f0f0f0 100%);
+}
+
+.piano-key-white.active {
+  background: linear-gradient(180deg, #e5e5e5 0%, #d4d4d4 100%);
+  transform: translateY(2px);
+  box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+.piano-key-black {
+  background: linear-gradient(180deg, #2a2a2a 0%, #1a1a1a 100%);
+  border-radius: 0 0 4px 4px;
+  transition: all 0.08s ease;
+}
+
+.piano-key-black:hover {
+  background: linear-gradient(180deg, #333 0%, #222 100%);
+}
+
+.piano-key-black.active {
+  background: linear-gradient(180deg, #444 0%, #333 100%);
+  transform: translateY(2px);
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: #1a1a2e;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #8b5cf6;
+  border-radius: 3px;
+}
