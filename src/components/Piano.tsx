@@ -13,48 +13,41 @@ interface KeyProps {
 function Key({ note, octave, isBlack, isActive, showLetters, showKeys, keyboardKey, onNoteOn, onNoteOff }: KeyProps) {
   const fullNote = `${note}${octave}`
   
-  const getLetterNote = (note: string): string => {
-    const letterMap: Record<string, string> = {
-      'C': 'C', 'C#': 'C#', 'D': 'D', 'D#': 'D#', 'E': 'E', 'F': 'F',
-      'F#': 'F#', 'G': 'G', 'G#': 'G#', 'A': 'A', 'A#': 'A#', 'B': 'B'
-    }
-    return letterMap[note] || note
-  }
-
-  const handleMouseDown = () => {
+  const handleMouseDown = (e: React.MouseEvent) => {
+    e.preventDefault()
     onNoteOn(fullNote)
   }
-  
-  const handleMouseUp = () => {
+  const handleMouseUp = (e: React.MouseEvent) => {
+    e.preventDefault()
     onNoteOff(fullNote)
   }
-  
-  const handleMouseLeave = () => {
-    if (isActive) {
-      onNoteOff(fullNote)
-    }
+  const handleMouseLeave = () => { if (isActive) onNoteOff(fullNote) }
+  const handleTouchStart = (e: React.TouchEvent) => {
+    e.preventDefault()
+    onNoteOn(fullNote)
+  }
+  const handleTouchEnd = (e: React.TouchEvent) => {
+    e.preventDefault()
+    onNoteOff(fullNote)
   }
 
   if (isBlack) {
     return (
       <div
-        className={`piano-key-black relative w-8 h-24 cursor-pointer select-none ${
-          isActive ? 'active' : ''
+        className={`absolute top-0 left-0 w-6 h-24 rounded-b-md cursor-pointer select-none z-20 transition-all duration-75 ${
+          isActive 
+            ? 'bg-gradient-to-b from-indigo-500 to-indigo-700 translate-y-0.5 shadow-lg shadow-indigo-500/40' 
+            : 'bg-gradient-to-b from-slate-700 to-slate-900 hover:from-slate-600 hover:to-slate-800'
         }`}
-        style={{ marginLeft: -5, marginRight: -5, zIndex: 10 }}
         onMouseDown={handleMouseDown}
         onMouseUp={handleMouseUp}
         onMouseLeave={handleMouseLeave}
+        onTouchStart={handleTouchStart}
+        onTouchEnd={handleTouchEnd}
       >
-        <div className="absolute bottom-1 left-1/2 -translate-x-1/2 flex flex-col items-center gap-0.5">
-          {showLetters && (
-            <span className="text-[7px] text-slate-400 font-medium">{getLetterNote(note)}</span>
-          )}
-          {showKeys && keyboardKey && (
-            <span className="text-[8px] text-purple-300 font-bold bg-purple-500/30 px-1 rounded">
-              {keyboardKey}
-            </span>
-          )}
+        <div className="absolute bottom-1 left-1/2 -translate-x-1/2 flex flex-col items-center">
+          {showLetters && <span className="text-[5px] text-slate-300 font-medium">{note}</span>}
+          {showKeys && keyboardKey && <span className="text-[6px] text-yellow-300 font-bold bg-yellow-500/30 px-0.5 rounded">{keyboardKey}</span>}
         </div>
       </div>
     )
@@ -62,22 +55,20 @@ function Key({ note, octave, isBlack, isActive, showLetters, showKeys, keyboardK
 
   return (
     <div
-      className={`piano-key-white w-10 h-40 cursor-pointer select-none flex flex-col items-center justify-end pb-1 ${
-        isActive ? 'active' : ''
+      className={`w-10 h-44 rounded-b-md cursor-pointer select-none flex flex-col items-center justify-end pb-1 transition-all duration-75 ${
+        isActive 
+          ? 'active' 
+          : 'piano-key-white'
       }`}
       onMouseDown={handleMouseDown}
       onMouseUp={handleMouseUp}
       onMouseLeave={handleMouseLeave}
+      onTouchStart={handleTouchStart}
+      onTouchEnd={handleTouchEnd}
     >
-      <div className="flex flex-col items-center gap-0.5">
-        {showLetters && (
-          <span className="text-[8px] text-slate-500 font-medium">{getLetterNote(note)}</span>
-        )}
-        {showKeys && keyboardKey && (
-          <span className="text-[9px] text-purple-600 font-bold bg-purple-500/20 px-1 rounded">
-            {keyboardKey}
-          </span>
-        )}
+      <div className="flex flex-col items-center -space-y-0.5">
+        {showLetters && <span className="text-[8px] text-slate-500 font-medium">{note}</span>}
+        {showKeys && keyboardKey && <span className="text-[7px] text-indigo-700 font-bold bg-indigo-100 px-1 rounded">{keyboardKey}</span>}
       </div>
     </div>
   )
@@ -96,46 +87,29 @@ interface PianoProps {
 const WHITE_KEYS = ['C', 'D', 'E', 'F', 'G', 'A', 'B']
 const BLACK_KEYS = ['C#', 'D#', null, 'F#', 'G#', 'A#', null]
 
-// Keyboard mapping for middle octaves (4-5)
-const KEYBOARD_MAP_LOWER: Record<string, string> = {
+const KEYBOARD_MAP: Record<string, string> = {
   'z': 'C', 's': 'C#', 'x': 'D', 'd': 'D#', 'c': 'E', 'v': 'F',
-  'g': 'F#', 'b': 'G', 'h': 'G#', 'n': 'A', 'j': 'A#', 'm': 'B'
-}
-
-const KEYBOARD_MAP_UPPER: Record<string, string> = {
+  'g': 'F#', 'b': 'G', 'h': 'G#', 'n': 'A', 'j': 'A#', 'm': 'B',
   'q': 'C', '2': 'C#', 'w': 'D', '3': 'D#', 'e': 'E', 'r': 'F',
   '5': 'F#', 't': 'G', '6': 'G#', 'y': 'A', '7': 'A#', 'u': 'B'
 }
 
-function Piano({ 
-  startOctave = 3, 
-  numOctaves = 5, 
-  activeKeys,
-  showLetters = true,
-  showKeys = true,
-  onNoteOn, 
-  onNoteOff 
-}: PianoProps) {
+function Piano({ startOctave = 3, numOctaves = 5, activeKeys, showLetters = true, showKeys = true, onNoteOn, onNoteOff }: PianoProps) {
   const octaves = Array.from({ length: numOctaves }, (_, i) => startOctave + i)
 
   const getKeyboardKey = (note: string, octave: number): string | undefined => {
-    const targetOctave = octave
-    // Map to middle octaves (4-5) for display
-    if (targetOctave === 4 || targetOctave === 5) {
-      const lowerKey = Object.entries(KEYBOARD_MAP_LOWER).find(([_, n]) => n === note)?.[0]
-      if (lowerKey) return lowerKey.toUpperCase()
-    }
-    if (targetOctave === 5 || targetOctave === 6) {
-      const upperKey = Object.entries(KEYBOARD_MAP_UPPER).find(([_, n]) => n === note)?.[0]
-      if (upperKey) return upperKey.toUpperCase()
+    const targetNote = Object.entries(KEYBOARD_MAP).find(([_, n]) => n === note)
+    if (targetNote && (octave === 4 || octave === 5)) {
+      return targetNote[0].toUpperCase()
     }
     return undefined
   }
 
   return (
-    <div className="flex">
+    <div className="flex relative select-none">
       {octaves.map((octave) => (
-        <div key={octave} className="flex">
+        <div key={octave} className="flex relative">
+          {/* White keys */}
           {WHITE_KEYS.map((note) => (
             <Key
               key={`${note}${octave}`}
@@ -150,22 +124,26 @@ function Piano({
               onNoteOff={onNoteOff}
             />
           ))}
-          <div className="flex relative" style={{ marginLeft: -5 }}>
-            {BLACK_KEYS.map((note) => {
-              if (note === null) return null
+          
+          {/* Black keys */}
+          <div className="absolute top-0 left-0 flex pointer-events-none" style={{ width: `${WHITE_KEYS.length * 40}px` }}>
+            {BLACK_KEYS.map((note, idx) => {
+              if (note === null) return <div key={idx} className="w-0" />
+              const positions: Record<number, string> = { 0: '20px', 1: '60px', 3: '140px', 4: '180px', 5: '220px' }
               return (
-                <Key
-                  key={`${note}${octave}`}
-                  note={note}
-                  octave={octave}
-                  isBlack={true}
-                  isActive={activeKeys.has(`${note}${octave}`)}
-                  showLetters={showLetters}
-                  showKeys={showKeys}
-                  keyboardKey={getKeyboardKey(note, octave)}
-                  onNoteOn={onNoteOn}
-                  onNoteOff={onNoteOff}
-                />
+                <div key={`black-${note}`} className="absolute pointer-events-auto" style={{ left: positions[idx] }}>
+                  <Key
+                    note={note}
+                    octave={octave}
+                    isBlack={true}
+                    isActive={activeKeys.has(`${note}${octave}`)}
+                    showLetters={showLetters}
+                    showKeys={showKeys}
+                    keyboardKey={getKeyboardKey(note, octave)}
+                    onNoteOn={onNoteOn}
+                    onNoteOff={onNoteOff}
+                  />
+                </div>
               )
             })}
           </div>

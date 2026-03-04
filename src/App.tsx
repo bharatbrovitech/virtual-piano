@@ -5,18 +5,20 @@ import {
   Pause,
   Square,
   Upload,
-  Volume2,
   Repeat,
   SkipBack,
   SkipForward,
   Maximize2,
   Mic,
-  ZoomIn,
-  ZoomOut,
   Music,
   Keyboard,
   Eye,
-  EyeOff
+  EyeOff,
+  ChevronDown,
+  ChevronUp,
+  Volume1,
+  VolumeX,
+  Power
 } from 'lucide-react'
 import Piano from './components/Piano'
 import { useKeyboardInput } from './hooks/useKeyboardInput'
@@ -39,12 +41,14 @@ interface FallingNote {
 }
 
 function App() {
-  const [volume, setVolume] = useState(-6)
+  const [volume, setVolumeState] = useState(-6)
+  const [isMuted, setIsMuted] = useState(false)
   const [isPlaying, setIsPlaying] = useState(false)
   const [isPaused, setIsPaused] = useState(false)
   const [tempo, setTempo] = useState(120)
   const [isLooping, setIsLooping] = useState(false)
   const [currentOctave, setCurrentOctave] = useState(3)
+  const [numOctaves, setNumOctaves] = useState(5)
   const [activeKeys, setActiveKeys] = useState<Set<string>>(new Set())
   const [midiNotes, setMidiNotes] = useState<MidiNote[]>([])
   const [midiFileName, setMidiFileName] = useState<string>('')
@@ -53,12 +57,12 @@ function App() {
   const [metronomeEnabled, setMetronomeEnabled] = useState(false)
   const [showLetters, setShowLetters] = useState(true)
   const [showKeys, setShowKeys] = useState(true)
-  const [isFullOctave, setIsFullOctave] = useState(false)
   const [isSustained, setIsSustained] = useState(false)
   const [showFallingNotes, setShowFallingNotes] = useState(true)
+  const [showControls, setShowControls] = useState(true)
+  const [audioReady, setAudioReady] = useState(false)
   
   const fileInputRef = useRef<HTMLInputElement>(null)
-  const synthRef = useRef<Tone.PolySynth | null>(null)
   const metronomeRef = useRef<Tone.Synth | null>(null)
   const animationFrameRef = useRef<number | null>(null)
   const recordedStartTimeRef = useRef<number>(0)
@@ -69,29 +73,33 @@ function App() {
   const playbackStartTimeRef = useRef<number>(0)
   const canvasAnimationRef = useRef<number | null>(null)
   
-  const { startAudio } = usePianoAudio(volume, synthRef)
+  const { startAudio, synthRef } = usePianoAudio()
+  
+  const updateVolume = useCallback((vol: number) => {
+    setVolumeState(vol)
+  }, [])
+  
+  const handleInitAudio = useCallback(async () => {
+    console.log('Initializing audio...')
+    await startAudio()
+    setAudioReady(true)
+  }, [startAudio])
   
   const playNote = useCallback(async (note: string, velocity = 0.8) => {
-    if (!synthRef.current) {
-      await startAudio()
+    if (!audioReady) {
+      await handleInitAudio()
     }
     if (synthRef.current) {
-      if (isSustained) {
-        sustainedNotesRef.current.add(note)
-      }
+      if (isSustained) sustainedNotesRef.current.add(note)
       synthRef.current.triggerAttack(note, Tone.now(), velocity)
     }
-    if (isRecording) {
-      setRecordedNotes(prev => [...prev, { note, velocity, time: Tone.now() - recordedStartTimeRef.current, duration: 0 }])
-    }
-  }, [isRecording, isSustained, startAudio])
+    if (isRecording) setRecordedNotes(prev => [...prev, { note, velocity, time: Tone.now() - recordedStartTimeRef.current, duration: 0 }])
+  }, [audioReady, handleInitAudio, isSustained, isRecording])
   
   const stopNote = useCallback((note: string) => {
-    if (synthRef.current) {
-      if (!isSustained) {
-        sustainedNotesRef.current.delete(note)
-        synthRef.current.triggerRelease(note, Tone.now())
-      }
+    if (synthRef.current && !isSustained) {
+      sustainedNotesRef.current.delete(note)
+      synthRef.current.triggerRelease(note, Tone.now())
     }
   }, [isSustained])
 
@@ -122,7 +130,12 @@ function App() {
     }
   })
 
-  useEffect(() => { if (synthRef.current) synthRef.current.volume.value = volume }, [volume])
+  useEffect(() => { 
+    if (synthRef.current) {
+      synthRef.current.volume.value = isMuted ? -60 : volume 
+    }
+  }, [volume, isMuted])
+
   useEffect(() => { Tone.getTransport().bpm.value = tempo }, [tempo])
 
   const noteToLane = (note: string): number => {
@@ -136,12 +149,19 @@ function App() {
     return (octave + 1) * 12 + noteIndex
   }
 
-  // Canvas rendering
   useEffect(() => {
     const canvas = canvasRef.current
     if (!canvas || !showFallingNotes) return
     const ctx = canvas.getContext('2d')
     if (!ctx) return
+
+    const updateCanvasSize = () => {
+      const containerWidth = Math.min(window.innerWidth - 40, numOctaves * 7 * 40)
+      canvas.width = containerWidth
+      canvas.height = 180
+    }
+    updateCanvasSize()
+    window.addEventListener('resize', updateCanvasSize)
 
     const render = () => {
       const width = canvas.width
@@ -150,54 +170,53 @@ function App() {
       const currentTime = isPlaying && !isPaused ? (Tone.now() - playbackStartTimeRef.current) * (tempo / 120) : 0
 
       ctx.clearRect(0, 0, width, height)
-
-      // Draw lanes
-      ctx.strokeStyle = 'rgba(255,255,255,0.1)'
+      ctx.fillStyle = 'rgba(30, 41, 59, 0.95)'
+      ctx.fillRect(0, 0, width, height)
+      ctx.strokeStyle = 'rgba(255,255,255,0.2)'
       ctx.lineWidth = 1
       for (let i = 0; i <= 88; i++) { ctx.beginPath(); ctx.moveTo(i * laneWidth, 0); ctx.lineTo(i * laneWidth, height); ctx.stroke() }
 
-      // Draw falling notes
       fallingNotesRef.current.forEach((note) => {
         const lane = noteToLane(note.note)
         if (lane < 0) return
         const x = lane * laneWidth
-        const noteHeight = 20
-        const barWidth = laneWidth - 4
-        const timeUntilPlay = (note.startTime - currentTime) * 50
+        const noteHeight = 22
+        const barWidth = Math.max(laneWidth - 2, 8)
+        const timeUntilPlay = (note.startTime - currentTime) * 80
         const y = height - timeUntilPlay - noteHeight
 
         if (y > -noteHeight && y < height + 50) {
-          const hue = note.velocity * 120
-          ctx.fillStyle = `hsl(${hue}, 70%, 60%)`
+          const gradient = ctx.createLinearGradient(x, y, x, y + noteHeight)
+          gradient.addColorStop(0, `hsl(${note.velocity * 120}, 80%, 55%)`)
+          gradient.addColorStop(1, `hsl(${note.velocity * 120}, 70%, 40%)`)
+          ctx.fillStyle = gradient
           ctx.beginPath()
-          ctx.roundRect(x + 2, y, barWidth, noteHeight, 4)
+          ctx.roundRect(x + 1, y, barWidth, noteHeight, 3)
           ctx.fill()
-          ctx.shadowColor = `hsl(${hue}, 70%, 60%)`
-          ctx.shadowBlur = 10
+          ctx.shadowColor = `hsl(${note.velocity * 120}, 80%, 55%)`
+          ctx.shadowBlur = 8
           ctx.fill()
           ctx.shadowBlur = 0
         }
 
-        // Sustained notes
         if (note.endTime > note.startTime) {
-          const endTimeUntilPlay = (note.endTime - currentTime) * 50
+          const endTimeUntilPlay = (note.endTime - currentTime) * 80
           const endY = height - endTimeUntilPlay - noteHeight
-          if (endY > 0 && endY < height) {
-            ctx.fillStyle = `hsla(${note.velocity * 120}, 70%, 60%, 0.3)`
-            ctx.fillRect(x + 2, endY, barWidth, y - endY)
+          if (endY > 0 && endY < height && endY < y) {
+            ctx.fillStyle = `hsla(${note.velocity * 120}, 70%, 45%, 0.4)`
+            ctx.fillRect(x + 1, endY, barWidth, y - endY)
           }
         }
       })
 
-      // Playhead
-      const playheadY = height - 30
-      ctx.strokeStyle = '#8b5cf6'
-      ctx.lineWidth = 2
+      const playheadY = height - 35
+      ctx.strokeStyle = '#818cf8'
+      ctx.lineWidth = 3
       ctx.beginPath()
       ctx.moveTo(0, playheadY)
       ctx.lineTo(width, playheadY)
       ctx.stroke()
-      ctx.shadowColor = '#8b5cf6'
+      ctx.shadowColor = '#818cf8'
       ctx.shadowBlur = 15
       ctx.stroke()
       ctx.shadowBlur = 0
@@ -205,12 +224,16 @@ function App() {
       canvasAnimationRef.current = requestAnimationFrame(render)
     }
     render()
-    return () => { if (canvasAnimationRef.current) cancelAnimationFrame(canvasAnimationRef.current) }
-  }, [showFallingNotes, isPlaying, isPaused, tempo])
+    return () => { 
+      window.removeEventListener('resize', updateCanvasSize)
+      if (canvasAnimationRef.current) cancelAnimationFrame(canvasAnimationRef.current) 
+    }
+  }, [showFallingNotes, isPlaying, isPaused, tempo, numOctaves])
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
     if (!file) return
+    if (!audioReady) await handleInitAudio()
     setMidiFileName(file.name)
     const arrayBuffer = await file.arrayBuffer()
     const midiData = new Uint8Array(arrayBuffer)
@@ -266,6 +289,7 @@ function App() {
     }))
     midiNotesRef.current = notes
     setMidiNotes(notes)
+    setShowFallingNotes(true)
   }
 
   const midiNumToNote = (num: number): string | null => {
@@ -277,7 +301,7 @@ function App() {
 
   const playMidi = useCallback(async () => {
     if (midiNotesRef.current.length === 0) return
-    if (!synthRef.current) await startAudio()
+    if (!audioReady) await handleInitAudio()
     setIsPlaying(true)
     setIsPaused(false)
     playbackStartTimeRef.current = Tone.now()
@@ -303,21 +327,25 @@ function App() {
       animationFrameRef.current = requestAnimationFrame(scheduleNote)
     }
     scheduleNote()
-  }, [tempo, isLooping, isPlaying, isPaused, startAudio])
+  }, [tempo, isLooping, isPlaying, isPaused, audioReady, handleInitAudio])
 
   const pauseMidi = () => { setIsPaused(true); Tone.getTransport().pause() }
   const stopMidi = () => { setIsPlaying(false); setIsPaused(false); setActiveKeys(new Set()); Tone.getTransport().stop(); Tone.getTransport().position = 0; if (animationFrameRef.current) cancelAnimationFrame(animationFrameRef.current) }
 
   const toggleFullscreen = () => { document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen() }
-
+  
   const toggleRecording = async () => {
-    if (!isRecording) { await startAudio(); recordedStartTimeRef.current = Tone.now(); setRecordedNotes([]); setIsRecording(true) }
-    else setIsRecording(false)
+    if (!isRecording) {
+      if (!audioReady) await handleInitAudio()
+      recordedStartTimeRef.current = Tone.now()
+      setRecordedNotes([])
+      setIsRecording(true)
+    } else setIsRecording(false)
   }
 
   const toggleMetronome = async () => {
     if (!metronomeEnabled) {
-      await startAudio()
+      if (!audioReady) await handleInitAudio()
       if (!metronomeRef.current) {
         metronomeRef.current = new Tone.Synth({ oscillator: { type: 'triangle' }, envelope: { attack: 0.001, decay: 0.1, sustain: 0, release: 0.1 } }).toDestination()
         metronomeRef.current.volume.value = -12
@@ -332,74 +360,129 @@ function App() {
     return () => { loop.dispose() }
   }, [metronomeEnabled])
 
-  const numOctaves = isFullOctave ? 7 : 5
-
   return (
-    <div className="min-h-screen bg-gradient-to-b from-[#1a1a2e] to-[#0f0f23] flex flex-col">
-      {showFallingNotes && midiNotes.length > 0 && (
-        <canvas ref={canvasRef} width={1400} height={300} className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 pointer-events-none z-20" style={{ maxWidth: '90vw' }} />
+    <div className="min-h-screen bg-gradient-to-b from-slate-50 to-slate-200 flex flex-col">
+      {/* Audio Init Overlay */}
+      {!audioReady && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/90 backdrop-blur-sm">
+          <button
+            onClick={handleInitAudio}
+            className="flex flex-col items-center gap-4 px-8 py-6 bg-indigo-600 hover:bg-indigo-700 text-white rounded-2xl shadow-2xl shadow-indigo-500/30 transition-all transform hover:scale-105"
+          >
+            <Power size={48} />
+            <span className="text-xl font-bold">Click to Start Piano</span>
+            <span className="text-sm text-indigo-200">Enable audio to play</span>
+          </button>
+        </div>
       )}
 
-      <header className="p-3 flex items-center justify-between border-b border-white/10 bg-[#16162a]">
-        <h1 className="text-xl font-bold text-white flex items-center gap-2">🎹 Virtual Piano</h1>
-        <button onClick={toggleFullscreen} className="p-2 rounded-lg hover:bg-white/10"><Maximize2 size={18} /></button>
+      {/* Header */}
+      <header className="px-4 py-3 flex items-center justify-between bg-white border-b border-slate-200 shadow-sm">
+        <h1 className="text-xl font-bold bg-gradient-to-r from-indigo-600 to-purple-600 bg-clip-text text-transparent">
+          🎹 Virtual Piano
+        </h1>
+        <div className="flex items-center gap-1">
+          <button onClick={() => setShowControls(!showControls)} className="p-2 rounded-lg hover:bg-slate-100">
+            {showControls ? <ChevronDown size={18} /> : <ChevronUp size={18} />}
+          </button>
+          <button onClick={toggleFullscreen} className="p-2 rounded-lg hover:bg-slate-100"><Maximize2 size={18} /></button>
+        </div>
       </header>
 
-      <div className="p-2 flex flex-wrap gap-2 items-center justify-center border-b border-white/5 bg-[#16162a]/50">
-        <div className="flex items-center gap-2 bg-white/5 rounded-lg px-3 py-1.5">
-          <Volume2 size={16} className="text-purple-400" />
-          <input type="range" min="-24" max="0" value={volume} onChange={(e) => setVolume(Number(e.target.value))} className="w-16 accent-purple-500" />
-          <span className="text-xs text-slate-400 w-8">{volume}</span>
+      {/* Controls */}
+      {showControls && (
+        <div className="px-3 py-2.5 flex flex-wrap gap-2 items-center justify-center bg-white border-b border-slate-200 shadow-sm">
+          {/* Volume */}
+          <div className="flex items-center gap-2 bg-slate-100 rounded-lg px-3 py-1.5">
+            <button onClick={() => setIsMuted(!isMuted)} className="text-slate-600 hover:text-indigo-600">
+              {isMuted ? <VolumeX size={14} /> : <Volume1 size={14} />}
+            </button>
+            <input type="range" min="-24" max="0" value={isMuted ? -60 : volume} onChange={(e) => updateVolume(Number(e.target.value))} className="w-16 accent-indigo-600" />
+          </div>
+
+          {/* Octave */}
+          <div className="flex items-center gap-1 bg-slate-100 rounded-lg px-2 py-1.5">
+            <button onClick={() => setCurrentOctave(prev => Math.max(1, prev - 1))} disabled={currentOctave <= 1} className="p-1 hover:bg-white rounded disabled:opacity-50"><SkipBack size={14} /></button>
+            <span className="text-xs font-medium w-10 text-center">C{currentOctave}</span>
+            <button onClick={() => setCurrentOctave(prev => Math.min(6, prev + 1))} disabled={currentOctave >= 6} className="p-1 hover:bg-white rounded disabled:opacity-50"><SkipForward size={14} /></button>
+          </div>
+
+          {/* Keys Count */}
+          <div className="flex items-center gap-1 bg-slate-100 rounded-lg p-1">
+            <button onClick={() => setNumOctaves(5)} className={`px-3 py-1 rounded text-xs font-medium ${numOctaves === 5 ? 'bg-indigo-600 text-white' : 'text-slate-600 hover:bg-white'}`}>5 Oct</button>
+            <button onClick={() => setNumOctaves(7)} className={`px-3 py-1 rounded text-xs font-medium ${numOctaves === 7 ? 'bg-indigo-600 text-white' : 'text-slate-600 hover:bg-white'}`}>7 Oct</button>
+          </div>
+
+          {/* Toggles */}
+          <button onClick={() => setShowLetters(!showLetters)} className={`flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg font-medium ${showLetters ? 'bg-indigo-100 text-indigo-700' : 'bg-slate-100 text-slate-600'}`}>
+            <Music size={12} /> Notes
+          </button>
+          <button onClick={() => setShowKeys(!showKeys)} className={`flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg font-medium ${showKeys ? 'bg-green-100 text-green-700' : 'bg-slate-100 text-slate-600'}`}>
+            <Keyboard size={12} /> Keys
+          </button>
+          <button onClick={() => setShowFallingNotes(!showFallingNotes)} className={`flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg font-medium ${showFallingNotes ? 'bg-purple-100 text-purple-700' : 'bg-slate-100 text-slate-600'}`}>
+            {showFallingNotes ? <Eye size={12} /> : <EyeOff size={12} />} MIDI View
+          </button>
+          
+          {/* Sustain */}
+          <button onClick={() => { setIsSustained(!isSustained); if (isSustained) releaseAllSustained() }} className={`flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg font-medium ${isSustained ? 'bg-amber-100 text-amber-700' : 'bg-slate-100 text-slate-600'}`}>
+            ◯ Sustain
+          </button>
+
+          {/* MIDI Upload */}
+          <div className="flex items-center gap-2 bg-slate-100 rounded-lg px-3 py-1.5">
+            <input ref={fileInputRef} type="file" accept=".mid,.midi" onChange={handleFileUpload} className="hidden" />
+            <button onClick={() => fileInputRef.current?.click()} className="flex items-center gap-1.5 text-xs font-medium text-indigo-600 hover:text-indigo-700">
+              <Upload size={12} />{midiFileName ? midiFileName.slice(0, 10) : 'Load MIDI'}
+            </button>
+          </div>
+
+          {/* Playback */}
+          {midiNotes.length > 0 && (
+            <>
+              <div className="flex items-center gap-1 bg-slate-100 rounded-lg p-1">
+                {!isPlaying ? <button onClick={playMidi} className="p-1.5 rounded bg-green-600 text-white hover:bg-green-700"><Play size={14} /></button> : isPaused ? <button onClick={() => { setIsPaused(false); Tone.getTransport().start() }} className="p-1.5 rounded bg-amber-500 text-white hover:bg-amber-600"><Play size={14} /></button> : <button onClick={pauseMidi} className="p-1.5 rounded bg-amber-500 text-white hover:bg-amber-600"><Pause size={14} /></button>}
+                <button onClick={stopMidi} className="p-1.5 rounded bg-red-500 text-white hover:bg-red-600"><Square size={14} /></button>
+              </div>
+              <div className="flex items-center gap-1 bg-slate-100 rounded-lg px-2 py-1.5">
+                <span className="text-xs text-slate-500">BPM</span>
+                <input type="range" min="40" max="240" value={tempo} onChange={(e) => setTempo(Number(e.target.value))} className="w-14 accent-indigo-600" />
+                <span className="text-xs font-medium w-8">{tempo}</span>
+              </div>
+              <button onClick={() => setIsLooping(!isLooping)} className={`p-1.5 rounded-lg ${isLooping ? 'bg-indigo-100 text-indigo-600' : 'bg-slate-100 text-slate-500'}`}><Repeat size={14} /></button>
+            </>
+          )}
+
+          <button onClick={toggleRecording} className={`p-1.5 rounded-lg ${isRecording ? 'bg-red-100 text-red-600 animate-pulse' : 'bg-slate-100 text-slate-500'}`}><Mic size={14} /></button>
+          <button onClick={toggleMetronome} className={`p-1.5 rounded-lg ${metronomeEnabled ? 'bg-cyan-100 text-cyan-600' : 'bg-slate-100 text-slate-500'}`}>🎵</button>
         </div>
+      )}
 
-        <div className="flex items-center gap-1 bg-white/5 rounded-lg px-2 py-1.5">
-          <button onClick={() => setCurrentOctave(prev => Math.max(1, prev - 1))} disabled={currentOctave <= 1} className="p-1 hover:bg-white/10 rounded disabled:opacity-50"><SkipBack size={16} /></button>
-          <span className="text-xs w-14 text-center">Oct {currentOctave}</span>
-          <button onClick={() => setCurrentOctave(prev => Math.min(6, prev + 1))} disabled={currentOctave >= 6} className="p-1 hover:bg-white/10 rounded disabled:opacity-50"><SkipForward size={16} /></button>
+      {/* Canvas */}
+      {showFallingNotes && midiNotes.length > 0 && (
+        <div className="flex justify-center px-4 py-2">
+          <canvas ref={canvasRef} className="rounded-xl shadow-lg" />
         </div>
+      )}
 
-        <div className="flex items-center gap-1 bg-white/5 rounded-lg px-2 py-1.5">
-          <button onClick={() => setIsFullOctave(false)} className={`p-1 rounded ${!isFullOctave ? 'bg-purple-500/30 text-purple-300' : 'hover:bg-white/10'}`}><ZoomOut size={16} /></button>
-          <button onClick={() => setIsFullOctave(true)} className={`p-1 rounded ${isFullOctave ? 'bg-purple-500/30 text-purple-300' : 'hover:bg-white/10'}`}><ZoomIn size={16} /></button>
-        </div>
-
-        <button onClick={() => setShowLetters(!showLetters)} className={`flex items-center gap-1 text-xs px-3 py-1.5 rounded-lg ${showLetters ? 'bg-blue-500/20 text-blue-400' : 'bg-white/5 text-slate-400'}`}><Music size={14} /> Letters</button>
-        <button onClick={() => setShowKeys(!showKeys)} className={`flex items-center gap-1 text-xs px-3 py-1.5 rounded-lg ${showKeys ? 'bg-green-500/20 text-green-400' : 'bg-white/5 text-slate-400'}`}><Keyboard size={14} /> Keys</button>
-        <button onClick={() => setShowFallingNotes(!showFallingNotes)} className={`flex items-center gap-1 text-xs px-3 py-1.5 rounded-lg ${showFallingNotes ? 'bg-pink-500/20 text-pink-400' : 'bg-white/5 text-slate-400'}`}>{showFallingNotes ? <Eye size={14} /> : <EyeOff size={14} />} Synthesia</button>
-        
-        <button onClick={() => { setIsSustained(!isSustained); if (isSustained) releaseAllSustained() }} className={`flex items-center gap-1 text-xs px-3 py-1.5 rounded-lg ${isSustained ? 'bg-yellow-500/20 text-yellow-400' : 'bg-white/5 text-slate-400'}`}>◯ Sustain</button>
-
-        <div className="flex items-center gap-2 bg-white/5 rounded-lg px-3 py-1.5">
-          <input ref={fileInputRef} type="file" accept=".mid,.midi" onChange={handleFileUpload} className="hidden" />
-          <button onClick={() => fileInputRef.current?.click()} className="flex items-center gap-1 text-xs hover:text-purple-400"><Upload size={14} />{midiFileName ? midiFileName.slice(0, 12) + '...' : 'MIDI'}</button>
-        </div>
-
-        {midiNotes.length > 0 && (
-          <>
-            <div className="flex items-center gap-1 bg-white/5 rounded-lg px-2 py-1.5">
-              {!isPlaying ? <button onClick={playMidi} className="text-green-400 p-1"><Play size={14} /></button> : isPaused ? <button onClick={() => { setIsPaused(false); Tone.getTransport().start() }} className="text-yellow-400 p-1"><Play size={14} /></button> : <button onClick={pauseMidi} className="text-yellow-400 p-1"><Pause size={14} /></button>}
-              <button onClick={stopMidi} className="text-red-400 p-1"><Square size={14} /></button>
-            </div>
-            <div className="flex items-center gap-1 bg-white/5 rounded-lg px-2 py-1.5">
-              <input type="range" min="40" max="240" value={tempo} onChange={(e) => setTempo(Number(e.target.value))} className="w-14 accent-purple-500" />
-              <span className="text-xs text-slate-400 w-8">{tempo}</span>
-            </div>
-            <button onClick={() => setIsLooping(!isLooping)} className={`p-1.5 rounded-lg ${isLooping ? 'bg-purple-500/20 text-purple-400' : 'bg-white/5 text-slate-400'}`}><Repeat size={14} /></button>
-          </>
-        )}
-
-        <button onClick={toggleRecording} className={`flex items-center gap-1 text-xs px-2 py-1.5 rounded-lg ${isRecording ? 'bg-red-500/20 text-red-400 animate-pulse' : 'bg-white/5 text-slate-400'}`}><Mic size={14} /></button>
-        <button onClick={toggleMetronome} className={`flex items-center gap-1 text-xs px-2 py-1.5 rounded-lg ${metronomeEnabled ? 'bg-cyan-500/20 text-cyan-400' : 'bg-white/5 text-slate-400'}`}>🎵</button>
-      </div>
-
-      <main className="flex-1 flex items-center justify-center p-4 overflow-auto relative">
-        <div className="bg-gradient-to-b from-[#2d2d4a] to-[#1a1a2e] p-4 rounded-lg shadow-2xl border border-white/10">
-          <Piano startOctave={currentOctave} numOctaves={numOctaves} activeKeys={activeKeys} onNoteOn={handleKeyDown} onNoteOff={handleKeyUp} showLetters={showLetters} showKeys={showKeys} />
+      {/* Piano */}
+      <main className="flex-1 flex items-center justify-center p-6 overflow-auto">
+        <div className="bg-white p-5 rounded-2xl shadow-xl border border-slate-200">
+          <Piano
+            startOctave={currentOctave}
+            numOctaves={numOctaves}
+            activeKeys={activeKeys}
+            onNoteOn={handleKeyDown}
+            onNoteOff={handleKeyUp}
+            showLetters={showLetters}
+            showKeys={showKeys}
+          />
         </div>
       </main>
 
-      <footer className="p-2 text-center text-xs text-slate-500 border-t border-white/5">
-        <p>Keys: Z S X D C V G B H N J M (Oct {currentOctave+1}) | Q W E R T Y U (Oct {currentOctave+2}) | Space: Sustain</p>
+      {/* Footer */}
+      <footer className="px-4 py-2 text-center text-xs text-slate-500 bg-white border-t border-slate-200">
+        <p><span className="font-medium">Keyboard:</span> Z S X D C V G B H N J M (C{currentOctave+1}) | Q W E R T Y U (C{currentOctave+2}) | Space: Sustain</p>
       </footer>
     </div>
   )
